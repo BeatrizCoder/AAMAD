@@ -29,6 +29,13 @@ classifiers = [
 dev = [
   "pytest>=7.0",
 ]
+ui = [
+  "streamlit>=1.25",
+]
+backend = [
+  "fastapi>=0.100",
+  "uvicorn>=0.22",
+]
 
 [project.urls]
 Homepage = "https://github.com/synaptic-ai-consulting/AAMAD"
@@ -37,6 +44,9 @@ Repository = "https://github.com/synaptic-ai-consulting/AAMAD.git"
 
 [project.scripts]
 aamad = "aamad.cli:main"
+aamad-support = "aamad.frontend:main"
+aamad-ui = "aamad.streamlit_app:main"
+aamad-backend = "aamad.backend:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

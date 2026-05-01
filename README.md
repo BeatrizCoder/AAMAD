@@ -90,6 +90,41 @@ aamad init --ide claude-code  # Claude Code
 aamad init --ide vscode       # VS Code + GitHub Copilot
 ```
 
+### Frontend CLI Demo
+
+You can also run a simple customer support frontend from the package:
+
+```bash
+python -m aamad.frontend
+# or, if installed as a script:
+aamad-support
+```
+
+### Web UI Demo (Streamlit)
+
+If you want to see the UI in the browser, install Streamlit and run:
+
+```bash
+pip install streamlit
+PYTHONPATH=src python -m streamlit run src/aamad/streamlit_app.py
+# or, if installed as a script:
+aamad-ui
+```
+
+### Backend API (FastAPI)
+
+To run the backend support crew, install the backend dependencies and start the server:
+
+```bash
+pip install fastapi uvicorn
+PYTHONPATH=src python -m aamad.backend
+# or, if installed as a script:
+aamad-backend
+```
+
+The Streamlit UI will attempt to call the backend at `http://127.0.0.1:8000/api/support`; if the backend is not available, it falls back to local processing.
+
+
 #### Framework feature implementation by IDE
 
 | Feature | Cursor | Claude Code | VS Code + Copilot |
@@ -155,6 +190,16 @@ python -m venv .venv
 source .venv/bin/activate
 pip install aamad
 aamad init --ide claude-code --dest .
+```
+
+### Frontend CLI Demo
+
+After installing the package, you can run the sample customer support frontend directly:
+
+```bash
+python -m aamad.frontend
+# or, if installed with scripts:
+aamad-support
 ```
 
 Or with uv:
