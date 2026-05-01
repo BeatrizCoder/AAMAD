@@ -35,6 +35,8 @@ ui = [
 backend = [
   "fastapi>=0.100",
   "uvicorn>=0.22",
+  "crewai>=0.70",
+  "python-dotenv>=1.0",
 ]
 
 [project.urls]
@@ -46,6 +48,8 @@ Repository = "https://github.com/synaptic-ai-consulting/AAMAD.git"
 aamad = "aamad.cli:main"
 aamad-support = "aamad.frontend:main"
 aamad-ui = "aamad.streamlit_app:main"
+aamad-backend = "aamad.backend:main"
+aamad-test = "test_backend:main"
 aamad-backend = "aamad.backend:main"
 
 [tool.setuptools]

@@ -1,17 +1,34 @@
-from __future__ import annotations
-
-import json
-import random
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any
-
+from crewai import Agent, Crew, Process, Task
+from crewai.tools import BaseTool
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+import yaml
+import random
+from typing import List, Dict, Any
+import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
-KNOWLEDGE_BASE: dict[str, list[str]] = {
+# Load configuration
+with open("config/agents.yaml", "r") as f:
+    agents_config = yaml.safe_load(f)
+
+with open("config/tasks.yaml", "r") as f:
+    tasks_config = yaml.safe_load(f)
+
+# Constants for tools
+CATEGORY_KEYWORDS = {
+    "Order Issues": ["order", "tracking", "shipment", "delivery", "package", "arrived", "delay"],
+    "Billing": ["bill", "charge", "refund", "invoice", "payment", "price"],
+    "Account Access": ["account", "login", "password", "sign in", "locked", "profile"],
+    "Technical Issue": ["error", "bug", "crash", "failed", "site", "website", "problem"],
+    "General Support": ["question", "help", "support", "information", "info", "request"],
+}
+
+KNOWLEDGE_BASE = {
     "Order Issues": [
         "Order Delivery Delays",
         "Tracking Your Package",
@@ -38,63 +55,9 @@ KNOWLEDGE_BASE: dict[str, list[str]] = {
     ],
 }
 
-CATEGORY_KEYWORDS = {
-    "Order Issues": [
-        "order",
-        "tracking",
-        "shipment",
-        "delivery",
-        "package",
-        "arrived",
-        "delay",
-    ],
-    "Billing": [
-        "bill",
-        "charge",
-        "refund",
-        "invoice",
-        "payment",
-        "price",
-    ],
-    "Account Access": [
-        "account",
-        "login",
-        "password",
-        "sign in",
-        "locked",
-        "profile",
-    ],
-    "Technical Issue": [
-        "error",
-        "bug",
-        "crash",
-        "failed",
-        "site",
-        "website",
-        "problem",
-    ],
-    "General Support": [
-        "question",
-        "help",
-        "support",
-        "information",
-        "info",
-        "request",
-    ],
-}
-
 SENTIMENT_NEGATIVE = [
-    "angry",
-    "upset",
-    "frustrated",
-    "disappointed",
-    "unhappy",
-    "mad",
-    "annoyed",
-    "worried",
-    "concerned",
-    "not happy",
-    "terrible",
+    "angry", "upset", "frustrated", "disappointed", "unhappy", "mad", "annoyed",
+    "worried", "concerned", "not happy", "terrible",
 ]
 
 SENTIMENT_URGENT = ["urgent", "asap", "immediately", "right away", "now"]
@@ -123,6 +86,127 @@ RESPONSE_TEMPLATES = {
     ),
 }
 
+class ClassificationTool(BaseTool):
+    name: str = "Classification Tool"
+    description: str = "Classifies customer inquiries into support categories"
+
+    def _run(self, inquiry: str) -> dict[str, Any]:
+        """Classify inquiry using keyword matching"""
+        inquiry_lower = inquiry.lower()
+        scores = {cat: sum(word in inquiry_lower for word in keywords)
+                 for cat, keywords in CATEGORY_KEYWORDS.items()}
+        best = max(scores, key=scores.get)
+        count = scores[best]
+        confidence = min(95, 40 + count * 15)
+        if best == "General Support" and count == 0:
+            confidence = 55
+
+        return {
+            "category": best,
+            "confidence": confidence,
+            "scores": scores
+        }
+
+
+class SentimentTool(BaseTool):
+    name: str = "Sentiment Analysis Tool"
+    description: str = "Analyzes sentiment and urgency in customer messages"
+
+    def _run(self, inquiry: str) -> dict[str, Any]:
+        """Analyze sentiment using keyword matching"""
+        inquiry_lower = inquiry.lower()
+        found_negative = any(term in inquiry_lower for term in SENTIMENT_NEGATIVE)
+        found_urgent = any(term in inquiry_lower for term in SENTIMENT_URGENT)
+
+        if found_negative:
+            label = "Concerned"
+            confidence = 80
+        elif found_urgent:
+            label = "Urgent"
+            confidence = 70
+        else:
+            label = "Neutral"
+            confidence = 65
+
+        urgency = "High" if found_urgent else "Medium" if found_negative else "Low"
+
+        return {
+            "sentiment": label,
+            "confidence": confidence,
+            "urgency": urgency,
+            "found_negative": found_negative,
+            "found_urgent": found_urgent
+        }
+
+
+class KnowledgeTool(BaseTool):
+    name: str = "Knowledge Retrieval Tool"
+    description: str = "Retrieves knowledge base articles for support categories"
+
+    def _run(self, category: str) -> dict[str, Any]:
+        """Retrieve relevant articles for a category"""
+        articles = KNOWLEDGE_BASE.get(category, KNOWLEDGE_BASE["General Support"])
+
+        return {
+            "articles": articles,
+            "count": len(articles),
+            "category": category
+        }
+
+
+class ResponseTool(BaseTool):
+    name: str = "Response Generation Tool"
+    description: str = "Generates appropriate customer responses based on context"
+
+    def _run(self, category: str, urgency: str, articles_count: int) -> dict[str, Any]:
+        """Generate appropriate response based on context"""
+        template = RESPONSE_TEMPLATES.get(category, RESPONSE_TEMPLATES["General Support"])
+        response = template
+        if urgency == "High":
+            response += " I have flagged this as a priority, and our support team will respond as soon as possible."
+
+        confidence = 60
+        if category != "General Support":
+            confidence += 15
+        if urgency == "Low":
+            confidence += 5
+        if articles_count >= 2:
+            confidence += 10
+
+        return {
+            "response": response,
+            "confidence": min(95, confidence),
+            "template_used": category
+        }
+
+
+class EscalationTool(BaseTool):
+    name: str = "Escalation Evaluation Tool"
+    description: str = "Evaluates if cases need escalation to human support"
+
+    def _run(self, response_confidence: int, sentiment: str, articles_count: int) -> dict[str, Any]:
+        """Evaluate if case needs escalation"""
+        escalate = False
+        reason = "Sufficient confidence in automated response."
+
+        if response_confidence < 55:
+            escalate = True
+            reason = "Low confidence in automated response."
+        elif sentiment == "Concerned" and response_confidence < 70:
+            escalate = True
+            reason = "Sensitive issue with low confidence."
+        elif articles_count == 0:
+            escalate = True
+            reason = "Insufficient knowledge base support."
+
+        reference_id = f"ESC-2026-{random.randint(1000, 9999)}" if escalate else ""
+
+        return {
+            "escalation_required": escalate,
+            "reason": reason,
+            "reference_id": reference_id
+        }
+
 
 class SupportTicket(BaseModel):
     inquiry: str
@@ -144,216 +228,92 @@ class SupportResponse(BaseModel):
     steps: list[dict[str, Any]]
 
 
-class SupportContext:
-    def __init__(self, inquiry: str) -> None:
-        self.inquiry = inquiry
-        self.category = "General Support"
-        self.category_confidence = 0
-        self.sentiment = "Neutral"
-        self.sentiment_confidence = 0
-        self.urgency = "Low"
-        self.articles: list[str] = []
-        self.response = ""
-        self.response_confidence = 0
-        self.escalation_required = False
-        self.escalation_reason = ""
-        self.reference_id = ""
-        self.steps: list[dict[str, Any]] = []
+class SupportState(BaseModel):
+    inquiry: str = ""
+    category: str = "General Support"
+    category_confidence: int = 0
+    sentiment: str = "Neutral"
+    sentiment_confidence: int = 0
+    urgency: str = "Low"
+    articles: list[str] = []
+    response: str = ""
+    response_confidence: int = 0
+    escalation_required: bool = False
+    escalation_reason: str = ""
+    reference_id: str = ""
+    steps: list[dict[str, Any]] = []
 
-    def log_step(self, name: str, details: dict[str, Any]) -> None:
-        self.steps.append({"agent": name, "details": details})
-
-
-class SupportAgent(ABC):
-    name: str
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    @abstractmethod
-    def run(self, context: SupportContext) -> None:
-        ...
-
-
-class ClassifierAgent(SupportAgent):
-    def __init__(self) -> None:
-        super().__init__("Classifier Agent")
-
-    def run(self, context: SupportContext) -> None:
-        normalized = context.inquiry.lower()
-        scores = {cat: sum(word in normalized for word in keywords) for cat, keywords in CATEGORY_KEYWORDS.items()}
-        best = max(scores, key=scores.get)
-        count = scores[best]
-        confidence = min(95, 40 + count * 15)
-        if best == "General Support" and count == 0:
-            confidence = 55
-        context.category = best
-        context.category_confidence = confidence
-        context.log_step(
-            self.name,
-            {
-                "category": context.category,
-                "confidence": context.category_confidence,
-            },
-        )
-
-
-class SentimentAnalysisAgent(SupportAgent):
-    def __init__(self) -> None:
-        super().__init__("Sentiment Analysis Agent")
-
-    def run(self, context: SupportContext) -> None:
-        normalized = context.inquiry.lower()
-        found_negative = any(term in normalized for term in SENTIMENT_NEGATIVE)
-        found_urgent = any(term in normalized for term in SENTIMENT_URGENT)
-        if found_negative:
-            label = "Concerned"
-            confidence = 80
-        elif found_urgent:
-            label = "Urgent"
-            confidence = 70
-        else:
-            label = "Neutral"
-            confidence = 65
-        urgency = "High" if found_urgent else "Medium" if found_negative else "Low"
-        context.sentiment = label
-        context.sentiment_confidence = confidence
-        context.urgency = urgency
-        context.log_step(
-            self.name,
-            {
-                "sentiment": context.sentiment,
-                "confidence": context.sentiment_confidence,
-                "urgency": context.urgency,
-            },
-        )
-
-
-class KnowledgeRetrievalAgent(SupportAgent):
-    def __init__(self) -> None:
-        super().__init__("Knowledge Retrieval Agent")
-
-    def run(self, context: SupportContext) -> None:
-        context.articles = KNOWLEDGE_BASE.get(context.category, KNOWLEDGE_BASE["General Support"])
-        context.log_step(
-            self.name,
-            {
-                "articles_found": len(context.articles),
-                "articles": context.articles[:3],
-            },
-        )
-
-
-class ResponseGenerationAgent(SupportAgent):
-    def __init__(self) -> None:
-        super().__init__("Response Generation Agent")
-
-    def run(self, context: SupportContext) -> None:
-        template = RESPONSE_TEMPLATES.get(context.category, RESPONSE_TEMPLATES["General Support"])
-        response = template
-        if context.urgency == "High":
-            response += " I have flagged this as a priority, and our support team will respond as soon as possible."
-        confidence = 60
-        if context.category != "General Support":
-            confidence += 15
-        if context.sentiment == "Neutral":
-            confidence += 5
-        if len(context.articles) >= 2:
-            confidence += 10
-        context.response = response
-        context.response_confidence = min(95, confidence)
-        context.log_step(
-            self.name,
-            {
-                "response": context.response,
-                "confidence": context.response_confidence,
-            },
-        )
-
-
-class EscalationAgent(SupportAgent):
-    def __init__(self) -> None:
-        super().__init__("Escalation Agent")
-
-    def run(self, context: SupportContext) -> None:
-        escalate = False
-        reason = "Sufficient confidence in automated response."
-        if context.response_confidence < 55:
-            escalate = True
-            reason = "Low confidence in automated response."
-        elif context.sentiment == "Concerned" and context.response_confidence < 70:
-            escalate = True
-            reason = "Sensitive issue with low confidence."
-        elif not context.articles:
-            escalate = True
-            reason = "Insufficient knowledge base support."
-        context.escalation_required = escalate
-        context.escalation_reason = reason
-        context.reference_id = self._build_reference_id()
-        context.log_step(
-            self.name,
-            {
-                "escalation_required": context.escalation_required,
-                "reason": context.escalation_reason,
-                "reference_id": context.reference_id,
-            },
-        )
-
-    def _build_reference_id(self) -> str:
-        return f"ESC-2026-{random.randint(1000, 9999)}"
-
-
-class FrontlineCrew:
-    def __init__(self) -> None:
-        self.agents: list[SupportAgent] = [
-            ClassifierAgent(),
-            SentimentAnalysisAgent(),
-            KnowledgeRetrievalAgent(),
-            ResponseGenerationAgent(),
-        ]
-
-    def execute(self, context: SupportContext) -> None:
-        for agent in self.agents:
-            agent.run(context)
-
-
-class EscalationCrew:
-    def __init__(self) -> None:
-        self.agents: list[SupportAgent] = [EscalationAgent()]
-
-    def execute(self, context: SupportContext) -> None:
-        for agent in self.agents:
-            agent.run(context)
+    def log_step(self, agent_name: str, details: dict[str, Any]) -> None:
+        self.steps.append({"agent": agent_name, "details": details})
 
 
 class SupportCrew:
-    def __init__(self) -> None:
-        self.frontline = FrontlineCrew()
-        self.escalation = EscalationCrew()
+    def __init__(self):
+        self.agents = {}
+        self._create_agents()
 
-    def process(self, inquiry: str) -> SupportContext:
-        context = SupportContext(inquiry=inquiry)
-        self.frontline.execute(context)
-        self.escalation.execute(context)
-        return context
+    def _create_agents(self):
+        """Create agents from configuration with tools"""
+        for agent_name, config in agents_config.items():
+            # Add tools based on agent role
+            tools = []
+            if agent_name == "classifier_agent":
+                tools.append(ClassificationTool())
+            elif agent_name == "sentiment_agent":
+                tools.append(SentimentTool())
+            elif agent_name == "knowledge_agent":
+                tools.append(KnowledgeTool())
+            elif agent_name == "response_agent":
+                tools.append(ResponseTool())
+            elif agent_name == "escalation_agent":
+                tools.append(EscalationTool())
+
+            self.agents[agent_name] = Agent(
+                role=config["role"],
+                goal=config["goal"],
+                backstory=config["backstory"],
+                tools=tools,
+                verbose=True
+            )
+
+    def process_support_request(self, inquiry: str) -> Dict[str, Any]:
+        """Process a support request using tools directly"""
+        # Use tools directly for processing
+        classification_result = self.agents["classifier_agent"].tools[0]._run(inquiry)
+        sentiment_result = self.agents["sentiment_agent"].tools[0]._run(inquiry)
+        knowledge_result = self.agents["knowledge_agent"].tools[0]._run(classification_result["category"])
+        response_result = self.agents["response_agent"].tools[0]._run(
+            classification_result["category"],
+            sentiment_result["urgency"],
+            knowledge_result["count"]
+        )
+        escalation_result = self.agents["escalation_agent"].tools[0]._run(
+            response_result["confidence"],
+            sentiment_result["sentiment"],
+            knowledge_result["count"]
+        )
+
+        return {
+            "category": classification_result["category"],
+            "category_confidence": classification_result["confidence"],
+            "sentiment": sentiment_result["sentiment"],
+            "urgency": sentiment_result["urgency"],
+            "response": response_result["response"],
+            "response_confidence": response_result["confidence"],
+            "escalation_required": escalation_result["escalation_required"],
+            "escalation_reason": escalation_result["reason"],
+            "reference_id": escalation_result["reference_id"],
+            "steps": [
+                {"agent": "Classifier Agent", "action": f"Classified as {classification_result['category']} with {classification_result['confidence']}% confidence", "tool_used": "ClassificationTool"},
+                {"agent": "Sentiment Agent", "action": f"Analyzed sentiment as {sentiment_result['sentiment']}, urgency {sentiment_result['urgency']}", "tool_used": "SentimentTool"},
+                {"agent": "Knowledge Agent", "action": f"Retrieved {knowledge_result['count']} knowledge articles", "tool_used": "KnowledgeTool"},
+                {"agent": "Response Agent", "action": f"Generated response with {response_result['confidence']}% confidence", "tool_used": "ResponseTool"},
+                {"agent": "Escalation Agent", "action": f"Escalation {'required' if escalation_result['escalation_required'] else 'not required'}", "tool_used": "EscalationTool"}
+            ]
+        }
 
 
-def build_response_model(context: SupportContext) -> SupportResponse:
-    return SupportResponse(
-        inquiry=context.inquiry,
-        category=context.category,
-        category_confidence=context.category_confidence,
-        sentiment=context.sentiment,
-        sentiment_confidence=context.sentiment_confidence,
-        urgency=context.urgency,
-        articles=context.articles,
-        response=context.response,
-        response_confidence=context.response_confidence,
-        escalation_required=context.escalation_required,
-        escalation_reason=context.escalation_reason,
-        reference_id=context.reference_id,
-        steps=context.steps,
-    )
+
 
 
 app = FastAPI(
@@ -383,8 +343,28 @@ async def create_support_ticket(ticket: SupportTicket) -> SupportResponse:
     inquiry = ticket.inquiry.strip()
     if not inquiry:
         raise HTTPException(status_code=400, detail="Inquiry text cannot be empty.")
-    context = support_crew.process(inquiry)
-    return build_response_model(context)
+
+    # Process the support request using the crew with tools
+    result = support_crew.process_support_request(inquiry)
+
+    # Build response model with all required fields
+    response = SupportResponse(
+        inquiry=inquiry,
+        category=result["category"],
+        category_confidence=result["category_confidence"],
+        sentiment=result["sentiment"],
+        sentiment_confidence=75,  # Default confidence for sentiment analysis
+        urgency=result["urgency"],
+        articles=[],  # Knowledge articles would be populated here
+        response=result["response"],
+        response_confidence=result["response_confidence"],
+        escalation_required=result["escalation_required"],
+        escalation_reason=result["escalation_reason"],
+        reference_id=result["reference_id"],
+        steps=result["steps"],
+    )
+
+    return response
 
 
 def main(argv: list[str] | None = None) -> int:

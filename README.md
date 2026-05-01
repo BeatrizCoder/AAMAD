@@ -1,7 +1,49 @@
 # AAMAD – AI-Assisted Multi-Agent Application Development Framework
 
-**AAMAD** is an open, production-grade framework for building, deploying, and evolving multi-agent applications using best context engineering practices.  
+**AAMAD** is an open, production-grade framework for building, deploying, and evolving multi-agent applications using best context engineering practices.
 It systematizes research-driven planning, modular AI agent workflows, and rapid MVP/devops pipelines for enterprise-ready AI solutions.
+
+---
+
+## Quick Start: CrewAI Support System
+
+AAMAD includes a complete customer support system powered by CrewAI with hierarchical agent orchestration. The system uses multiple specialized agents working together under a manager agent to handle customer inquiries.
+
+### Running the Support System
+
+1. **Install dependencies:**
+   ```bash
+   pip install -e .
+   ```
+
+2. **Set up environment variables:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your GOOGLE_API_KEY
+   ```
+
+3. **Start the backend:**
+   ```bash
+   python -m src.aamad.backend
+   ```
+
+4. **Launch the frontend:**
+   ```bash
+   streamlit run src/aamad/streamlit_app.py
+   ```
+
+### How It Works
+
+The system uses **hierarchical process** with these agents:
+
+- **Manager Agent**: Coordinates the entire support process, delegates tasks, and ensures quality
+- **Classifier Agent**: Categorizes inquiries (Order Issues, Billing, Account Access, Technical Issues, General Support)
+- **Sentiment Agent**: Analyzes emotional tone and urgency levels
+- **Knowledge Agent**: Retrieves relevant support articles
+- **Response Agent**: Generates helpful, contextual responses
+- **Escalation Agent**: Determines when human intervention is needed
+
+Tasks run in a coordinated workflow where the manager oversees execution and can dynamically adjust based on results.
 
 ---
 
